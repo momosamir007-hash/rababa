@@ -15,7 +15,6 @@ st.set_page_config(page_title="مُشكِّل النصوص العربية", page
 # 2. تثبيت المكتبات الناقصة
 # =============================================
 def install_missing_packages():
-    """تثبيت المكتبات المطلوبة"""
     required_packages = {
         "tqdm": "tqdm",
         "numpy": "numpy",
@@ -26,7 +25,6 @@ def install_missing_packages():
         try:
             __import__(import_name)
         except ImportError:
-            st.toast(f"⏳ جاري تثبيت {package_name}...")
             try:
                 subprocess.check_call([
                     sys.executable,
@@ -67,7 +65,79 @@ def find_arabic_python_dir():
 PYTHON_DIR = find_arabic_python_dir()
 
 # =============================================
-# 4. واجهة المستخدم
+# 4. ✅ إصلاح مشكلة PyTorch 2.6 تلقائياً
+# =============================================
+def patch_torch_load(python_dir):
+    """ تعديل config_manager.py لإضافة weights_only=False لحل مشكلة PyTorch 2.6 الجديدة """
+    config_manager_path = os.path.join(python_dir, "config_manager.py")
+    if not os.path.exists(config_manager_path):
+        return False
+    with open(config_manager_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    # التحقق هل تم التعديل سابقاً
+    if "weights_only=False" in content:
+        return True   # تم التعديل مسبقاً
+    # =============================================
+    # التعديل 1: إصلاح torch.load العادي
+    # من: torch.load(path)
+    # إلى: torch.load(path, weights_only=False)
+    # =============================================
+    # نمط 1: torch.load(last_model_path)
+    content = content.replace(
+        "torch.load(last_model_path)",
+        "torch.load(last_model_path, weights_only=False)"
+    )
+    # نمط 2: torch.load(last_model_path, map_location=torch.device('cpu'))
+    content = content.replace(
+        "torch.load(last_model_path, map_location=torch.device('cpu'))",
+        "torch.load(last_model_path, map_location=torch.device('cpu'), weights_only=False)"
+    )
+    # نمط 3: أي torch.load آخر بدون weights_only
+    # باستخدام regex للحالات الأخرى
+    content = re.sub(
+        r"torch\.load\(([^)]+)\)(?!.*weights_only)",
+        lambda m: f"torch.load({m.group(1)}, weights_only=False)" if "weights_only" not in m.group(1) else m.group(0),
+        content
+    )
+    # حفظ الملف المعدل
+    with open(config_manager_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return True
+
+# =============================================
+# 5. ✅ إصلاح إضافي: إجبار CPU في config_manager.py
+# =============================================
+def patch_force_cpu(python_dir):
+    """ تعديل config_manager.py لإجبار CPU دائماً """
+    config_manager_path = os.path.join(python_dir, "config_manager.py")
+    if not os.path.exists(config_manager_path):
+        return False
+    with open(config_manager_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    if "# FORCE_CPU_PATCHED" in content:
+        return True
+    # استبدال السطر الشرطي بسطر CPU مباشر
+    old_pattern = (
+        "saved_model = torch.load(last_model_path) "
+        "if torch.cuda.is_available() else "
+        "torch.load(last_model_path, map_location=torch.device('cpu'))"
+    )
+    new_code = (
+        "# FORCE_CPU_PATCHED\n"
+        " saved_model = torch.load("
+        "last_model_path, "
+        "map_location=torch.device('cpu'), "
+        "weights_only=False)"
+    )
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(config_manager_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return True
+    return False
+
+# =============================================
+# 6. واجهة المستخدم
 # =============================================
 st.markdown("""
     <style>
@@ -88,7 +158,7 @@ st.markdown("""
 st.title("📝 مُشكِّل النصوص العربية الذكي")
 
 # =============================================
-# 5. التحقق من المحرك
+# 7. التحقق من المحرك
 # =============================================
 if PYTHON_DIR is None:
     st.error("❌ لم يتم العثور على ملف المحرك!")
@@ -97,16 +167,23 @@ if PYTHON_DIR is None:
 st.caption(f"✅ المحرك: `{PYTHON_DIR}`")
 
 # =============================================
-# 6. المسارات
+# 8. تطبيق الإصلاحات
 # =============================================
-DIACRITIZE_SCRIPT = os.path.join(PYTHON_DIR, "diacritize.py")
+if "patches_applied" not in st.session_state:
+    with st.spinner("🔧 تطبيق إصلاحات التوافق..."):
+        patch1 = patch_force_cpu(PYTHON_DIR)
+        patch2 = patch_torch_load(PYTHON_DIR)
+        if patch1 or patch2:
+            st.toast("✅ تم تطبيق إصلاحات التوافق")
+    st.session_state.patches_applied = True
+
+# =============================================
+# 9. المسارات والأوزان
+# =============================================
 WEIGHTS_DIR = os.path.join(PYTHON_DIR, "log_dir", "CA_MSA.base.cbhg", "models")
 WEIGHTS_FILE = os.path.join(WEIGHTS_DIR, "2000000-snapshot.pt")
 WEIGHTS_URL = "https://github.com/secryst/rababa-models/releases/download/0.1/2000000-snapshot.pt"
 
-# =============================================
-# 7. تحميل الأوزان
-# =============================================
 if not os.path.exists(WEIGHTS_FILE):
     with st.spinner("⏳ تحميل النموذج (~200MB)..."):
         os.makedirs(WEIGHTS_DIR, exist_ok=True)
@@ -118,7 +195,7 @@ if not os.path.exists(WEIGHTS_FILE):
             st.stop()
 
 # =============================================
-# 8. استخراج اسم المكتبة
+# 10. استخراج اسم المكتبة الناقصة
 # =============================================
 def extract_package_name(error_message):
     package_map = {
@@ -135,9 +212,9 @@ def extract_package_name(error_message):
     return None
 
 # =============================================
-# 9. التشكيل
+# 11. التشكيل
 # =============================================
-user_text = st.text_area("✏️ أدخل النص العربي:", height=150, placeholder="اكتب هنا...")
+user_text = st.text_area("✏️ أدخل النص العربي:", height=150, placeholder="اكتب هنا النص العربي...")
 
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -157,14 +234,21 @@ if run_button:
                 "--config", "config/cbhg.yml",
                 "--text", user_text
             ]
-            # 👇 إجبار PyTorch على استخدام CPU
             env = os.environ.copy()
             env["PYTHONPATH"] = str(PYTHON_DIR) + os.pathsep + env.get("PYTHONPATH", "")
-            env["CUDA_VISIBLE_DEVICES"] = ""   # ✅ تعطيل GPU
-            env["OMP_NUM_THREADS"] = "4"       # ✅ تحسين CPU
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            env["OMP_NUM_THREADS"] = "4"
 
             if debug_mode:
                 st.code(f"الأمر: {' '.join(command)}\nالمجلد: {PYTHON_DIR}")
+                # عرض محتوى config_manager.py المعدل
+                cm_path = os.path.join(PYTHON_DIR, "config_manager.py")
+                if os.path.exists(cm_path):
+                    with open(cm_path, "r") as f:
+                        lines = f.readlines()
+                    # عرض الأسطر التي تحتوي torch.load
+                    relevant = [l.strip() for l in lines if "torch.load" in l]
+                    st.code("torch.load lines:\n" + "\n".join(relevant))
 
             try:
                 result = subprocess.run(
@@ -214,11 +298,12 @@ if run_button:
                                     st.error("❌ فشل التثبيت:")
                                     st.code(install_result.stderr)
                         else:
-                            st.error("❌ خطأ غير معروف:")
+                            st.error("❌ خطأ:")
                             st.code(error_msg)
-                    elif "CUDA" in error_msg or "cuda" in error_msg:
-                        st.error("❌ خطأ GPU (يعمل الآن على CPU)")
-                        st.code(error_msg)
+                    elif "weights_only" in error_msg or "UnpicklingError" in error_msg:
+                        st.error("❌ مشكلة توافق PyTorch - إعادة تطبيق الإصلاح...")
+                        st.session_state.patches_applied = False
+                        st.rerun()
                     else:
                         st.error("❌ خطأ:")
                         st.code(error_msg)
@@ -227,17 +312,14 @@ if run_button:
                 st.error("❌ انتهت المهلة!")
             except Exception as e:
                 st.error(f"❌ خطأ: {e}")
-                if debug_mode:
-                    import traceback
-                    st.code(traceback.format_exc())
 
 # =============================================
-# 10. معلومات
+# 12. معلومات
 # =============================================
 with st.expander("ℹ️ معلومات"):
     st.markdown("""
-        - **المحرك**: Rababa CBHG
-        - **الوضع**: CPU فقط (Streamlit Cloud)
+        - **المحرك**: Rababa CBHG (CPU Mode)
+        - **PyTorch**: متوافق مع 2.6+
         - **الدقة**: ~95% على الفصحى
     """)
     st.text(f"📂 {PYTHON_DIR}")
