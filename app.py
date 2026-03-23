@@ -15,28 +15,32 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. تحديد المسارات الذكية (Smart Paths)
-# الحصول على المسار الأساسي للمشروع على السيرفر
+# --- 2. تحديد المسارات بطريقة ديناميكية ذكية ---
+# هذا السطر سيجلب المسار الحالي للمجلد الذي يعمل فيه app.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# المسار المتوقع لمجلد python (تأكد أن اسمه python بحروف صغيرة في GitHub)
+# البحث عن مجلد python:
+# أولاً: نجرب إذا كان المجلد موجوداً مباشرة بجانب app.py (كما في صورتك الأخيرة)
 PYTHON_DIR = os.path.join(BASE_DIR, "python")
-DIACRITIZE_SCRIPT = os.path.join(PYTHON_DIR, "diacritize.py")
-CONFIG_FILE = os.path.join(PYTHON_DIR, "config", "cbhg.yml")
 
-# مسار ملف الأوزان (Weights)
+# ثانياً: إذا لم يجده، نجرب البحث داخل مجلد فرعي اسمه rababa (للاحتياط)
+if not os.path.exists(PYTHON_DIR):
+    PYTHON_DIR = os.path.join(BASE_DIR, "rababa", "python")
+
+DIACRITIZE_SCRIPT = os.path.join(PYTHON_DIR, "diacritize.py")
 WEIGHTS_DIR = os.path.join(PYTHON_DIR, "log_dir", "CA_MSA.base.cbhg", "models")
 WEIGHTS_FILE = os.path.join(WEIGHTS_DIR, "2000000-snapshot.pt")
 WEIGHTS_URL = "https://github.com/secryst/rababa-models/releases/download/0.1/2000000-snapshot.pt"
 
-# 3. وظيفة التحميل التلقائي للأوزان
+# --- 3. وظيفة التحميل التلقائي للأوزان ---
 def initialize_assets():
-    if not os.path.exists(PYTHON_DIR):
-        st.error(f"❌ لم يتم العثور على مجلد 'python'. المسار الحالي: {BASE_DIR}")
+    if not os.path.exists(DIACRITIZE_SCRIPT):
+        st.error(f"❌ لم يتم العثور على ملف المحرك diacritize.py في المسار: {DIACRITIZE_SCRIPT}")
+        st.info("تأكد أن مجلد 'python' موجود في GitHub بنفس مستوى ملف app.py وبحروف صغيرة.")
         return False
     
     if not os.path.exists(WEIGHTS_FILE):
-        with st.spinner("⏳ جاري تحميل ملفات الذكاء الاصطناعي لأول مرة (50MB)..."):
+        with st.spinner("⏳ جاري تحميل ملفات الذكاء الاصطناعي (50MB)..."):
             try:
                 os.makedirs(WEIGHTS_DIR, exist_ok=True)
                 urllib.request.urlretrieve(WEIGHTS_URL, WEIGHTS_FILE)
@@ -46,24 +50,22 @@ def initialize_assets():
                 return False
     return True
 
-# 4. واجهة المستخدم الرئيسية
+# --- 4. واجهة المستخدم ---
 st.title("📝 مُشكِّل النصوص العربية الذكي")
-st.markdown("تطبيق ويب يعتمد على نموذج **Rababa** لتشكيل النصوص العربية بدقة عالية.")
 st.markdown("---")
 
-# التأكد من جاهزية الملفات قبل السماح للمستخدم بالكتابة
 assets_ready = initialize_assets()
 
-user_text = st.text_area("أدخل النص العربي المراد تشكيله:", height=150, placeholder="مثال: ان المشروع يهدف الى تطوير ادوات الذكاء الاصطناعي...")
+user_text = st.text_area("أدخل النص العربي المراد تشكيله:", height=150)
 
 if st.button("تـشـكـيـل الـنـص 🚀", type="primary", use_container_width=True):
     if not assets_ready:
-        st.error("❌ لا يمكن التشغيل بسبب فقدان ملفات النظام.")
+        st.error("❌ النظام غير جاهز للعمل.")
     elif not user_text.strip():
-        st.warning("⚠️ يرجى إدخال نص أولاً.")
+        st.warning("⚠️ يرجى إدخال نص.")
     else:
-        with st.spinner("⏳ جاري تحليل النص..."):
-            # تجهيز أمر التشغيل باستخدام python الخاص بالبيئة الحالية (sys.executable)
+        with st.spinner("⏳ جاري المعالجة..."):
+            # استخدام sys.executable لضمان استخدام بايثون الخاص بالسيرفر
             command = [
                 sys.executable, 
                 "diacritize.py", 
@@ -73,7 +75,6 @@ if st.button("تـشـكـيـل الـنـص 🚀", type="primary", use_contain
             ]
             
             try:
-                # تنفيذ العملية من داخل مجلد python لضمان عمل المسارات النسبية داخل المشروع
                 result = subprocess.run(
                     command, 
                     cwd=PYTHON_DIR, 
@@ -83,19 +84,11 @@ if st.button("تـشـكـيـل الـنـص 🚀", type="primary", use_contain
                 )
                 
                 if result.returncode != 0:
-                    st.error(f"❌ خطأ داخلي في المحرك:\n{result.stderr.strip()}")
+                    st.error(f"❌ خطأ داخلي:\n{result.stderr.strip()}")
                 else:
-                    # سحب النص المشكل (آخر سطر غير فارغ في المخرجات)
                     lines = [line.strip() for line in result.stdout.split('\n') if line.strip()]
                     if lines:
-                        diacritized_result = lines[-1]
-                        st.success("✅ تم التشكيل!")
-                        st.text_area("النتيجة:", value=diacritized_result, height=150)
-                    else:
-                        st.warning("⚠️ لم يتم استرجاع أي نتائج من النموذج.")
-                        
+                        st.success("✅ تم!")
+                        st.text_area("النتيجة:", value=lines[-1], height=150)
             except Exception as e:
-                st.error(f"❌ حدث خطأ غير متوقع: {e}")
-
-st.markdown("---")
-st.caption("التطبيق يعمل بواسطة Rababa و Streamlit Cloud.")
+                st.error(f"❌ خطأ غير متوقع: {e}")
