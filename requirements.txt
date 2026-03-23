@@ -5,3 +5,4 @@ numpy
 pyyaml
 onnxruntime
 diacritization_evaluation
+ruamel.yaml
