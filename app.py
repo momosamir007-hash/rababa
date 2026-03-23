@@ -4,6 +4,7 @@ import subprocess
 import urllib.request
 import sys
 from pathlib import Path
+import re
 
 # =============================================
 # 1. إعدادات الصفحة
@@ -14,27 +15,31 @@ st.set_page_config(page_title="مُشكِّل النصوص العربية", page
 # 2. تثبيت المكتبات الناقصة تلقائياً
 # =============================================
 def install_missing_packages():
-    """تثبيت أي مكتبة ناقصة يحتاجها محرك التشكيل"""
-    required_packages = [
-        "tqdm",
-        "torch",
-        "numpy",
-        "pyyaml",
-        "onnxruntime"
-    ]
-    for package in required_packages:
+    """تثبيت المكتبات المطلوبة"""
+    required_packages = {
+        "tqdm": "tqdm",
+        "torch": "torch",
+        "numpy": "numpy",
+        "yaml": "pyyaml",
+        "ruamel": "ruamel.yaml",  # 👈 التصحيح هنا
+        "onnxruntime": "onnxruntime"
+    }
+    for import_name, package_name in required_packages.items():
         try:
-            __import__(package)
+            __import__(import_name)
         except ImportError:
-            st.toast(f"⏳ جاري تثبيت {package}...")
-            subprocess.check_call([
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                package,
-                "-q"
-            ])
+            st.toast(f"⏳ جاري تثبيت {package_name}...")
+            try:
+                subprocess.check_call([
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    package_name,
+                    "-q"
+                ])
+            except subprocess.CalledProcessError:
+                st.warning(f"⚠️ فشل تثبيت {package_name} - سيتم المحاولة لاحقاً")
 
 # تشغيل التثبيت عند أول تحميل فقط
 if "packages_installed" not in st.session_state:
@@ -43,35 +48,30 @@ if "packages_installed" not in st.session_state:
     st.session_state.packages_installed = True
 
 # =============================================
-# 3. وظيفة البحث الذكي عن المجلد الصحيح (العربي)
+# 3. وظيفة البحث الذكي عن المجلد الصحيح
 # =============================================
 def find_arabic_python_dir():
-    """ البحث عن diacritize.py في المجلد العربي تحديداً وليس العبري أو أي مجلد آخر """
+    """البحث عن diacritize.py في المجلد العربي"""
     cwd = Path(os.getcwd())
 
-    # === الأولوية 1: البحث عن المسار العربي تحديداً ===
+    # الأولوية للمسار العربي
     arabic_patterns = [
-        "python/diacritize.py",        # مباشرة
-        "python/arabic/diacritize.py", # داخل مجلد arabic
-        "arabic/diacritize.py",        # مجلد arabic مباشر
+        "python/arabic/diacritize.py",
+        "python/diacritize.py",
+        "arabic/diacritize.py",
     ]
     for pattern in arabic_patterns:
         candidate = cwd / pattern
         if candidate.exists():
             return candidate.parent.absolute()
 
-    # === الأولوية 2: البحث العام مع استبعاد hebrew ===
+    # البحث العام مع استبعاد hebrew
     all_matches = list(cwd.rglob("diacritize.py"))
     for match in all_matches:
-        # استبعاد مجلد hebrew
         if "hebrew" not in str(match).lower():
             return match.parent.absolute()
 
-    # === الأولوية 3: أول نتيجة (حتى لو hebrew) ===
-    if all_matches:
-        return all_matches[0].parent.absolute()
-
-    return None
+    return all_matches[0].parent.absolute() if all_matches else None
 
 PYTHON_DIR = find_arabic_python_dir()
 
@@ -102,19 +102,8 @@ st.title("📝 مُشكِّل النصوص العربية الذكي")
 if PYTHON_DIR is None:
     st.error("❌ لم يتم العثور على ملف المحرك diacritize.py!")
     st.info(f"📂 المسار الحالي: `{os.getcwd()}`")
-    # عرض هيكل الملفات للمساعدة في التشخيص
-    with st.expander("🔍 عرض هيكل الملفات للتشخيص"):
-        for root, dirs, files in os.walk(os.getcwd()):
-            level = root.replace(os.getcwd(), '').count(os.sep)
-            indent = ' ' * 2 * level
-            st.text(f'{indent}📁 {os.path.basename(root)}/')
-            if level < 3:  # عرض 3 مستويات فقط
-                subindent = ' ' * 2 * (level + 1)
-                for file in files[:10]:
-                    st.text(f'{subindent}📄 {file}')
     st.stop()
 
-# عرض المسار المُكتشف
 st.caption(f"✅ تم العثور على المحرك في: `{PYTHON_DIR}`")
 
 # =============================================
@@ -124,31 +113,39 @@ DIACRITIZE_SCRIPT = os.path.join(PYTHON_DIR, "diacritize.py")
 WEIGHTS_DIR = os.path.join(PYTHON_DIR, "log_dir", "CA_MSA.base.cbhg", "models")
 WEIGHTS_FILE = os.path.join(WEIGHTS_DIR, "2000000-snapshot.pt")
 WEIGHTS_URL = "https://github.com/secryst/rababa-models/releases/download/0.1/2000000-snapshot.pt"
-CONFIG_FILE = os.path.join(PYTHON_DIR, "config", "cbhg.yml")
 
 # =============================================
 # 7. تحميل الأوزان
 # =============================================
 if not os.path.exists(WEIGHTS_FILE):
-    with st.spinner("⏳ جاري تحميل نموذج الذكاء الاصطناعي (مرة واحدة فقط ~200MB)..."):
+    with st.spinner("⏳ جاري تحميل نموذج الذكاء الاصطناعي (~200MB)..."):
         os.makedirs(WEIGHTS_DIR, exist_ok=True)
         try:
             urllib.request.urlretrieve(WEIGHTS_URL, WEIGHTS_FILE)
-            st.success("✅ تم تحميل النموذج بنجاح!")
+            st.success("✅ تم تحميل النموذج!")
         except Exception as e:
-            st.error(f"❌ فشل تحميل النموذج: {e}")
+            st.error(f"❌ فشل التحميل: {e}")
             st.stop()
 
 # =============================================
-# 8. التحقق من ملف الإعدادات
+# 8. دالة استخراج اسم المكتبة الصحيح
 # =============================================
-if not os.path.exists(CONFIG_FILE):
-    st.warning(f"⚠️ ملف الإعدادات غير موجود: `{CONFIG_FILE}`")
-    # عرض ملفات الإعدادات المتاحة
-    config_dir = os.path.join(PYTHON_DIR, "config")
-    if os.path.exists(config_dir):
-        configs = os.listdir(config_dir)
-        st.info(f"ملفات الإعدادات المتاحة: {configs}")
+def extract_package_name(error_message):
+    """ استخراج اسم الحزمة الصحيح من رسالة الخطأ مع معالجة الحالات الخاصة """
+    # خريطة الأسماء المعروفة
+    package_map = {
+        "ruamel": "ruamel.yaml",
+        "yaml": "pyyaml",
+        "cv2": "opencv-python",
+        "PIL": "pillow",
+        "sklearn": "scikit-learn"
+    }
+    # استخراج اسم المكتبة من الرسالة
+    match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_message)
+    if match:
+        module_name = match.group(1).split('.')[0]  # أخذ الجزء الأول فقط
+        return package_map.get(module_name, module_name)
+    return None
 
 # =============================================
 # 9. منطق التشكيل
@@ -166,7 +163,6 @@ if run_button:
         st.warning("⚠️ الرجاء إدخال نص عربي أولاً!")
     else:
         with st.spinner("⏳ جاري تشكيل النص..."):
-            # بناء الأمر
             command = [
                 sys.executable,
                 "diacritize.py",
@@ -174,7 +170,6 @@ if run_button:
                 "--config", "config/cbhg.yml",
                 "--text", user_text
             ]
-            # إضافة PYTHONPATH لضمان استيراد الوحدات
             env = os.environ.copy()
             env["PYTHONPATH"] = str(PYTHON_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 
@@ -189,7 +184,7 @@ if run_button:
                     text=True,
                     encoding="utf-8",
                     env=env,
-                    timeout=120      # حد أقصى دقيقتين
+                    timeout=120
                 )
 
                 if debug_mode:
@@ -199,7 +194,6 @@ if run_button:
                         st.text(f"STDERR:\n{result.stderr}")
 
                 if result.returncode == 0:
-                    # استخراج النتيجة من آخر سطر
                     lines = [l.strip() for l in result.stdout.split('\n') if l.strip()]
                     if lines:
                         diacritized_text = lines[-1]
@@ -208,13 +202,65 @@ if run_button:
                             f'<div class="result-box">{diacritized_text}</div>',
                             unsafe_allow_html=True
                         )
-                        # زر النسخ
                         st.code(diacritized_text, language=None)
                     else:
                         st.warning("⚠️ لم يُرجع المحرك أي نتيجة!")
                 else:
+                    error_msg = result.stderr
+
                     # ===============================
-                    # معالجة الأخطاء الشائعة
+                    # معالجة خطأ المكتبة الناقصة
+                    # ===============================
+                    if "No module named" in error_msg:
+                        package_name = extract_package_name(error_msg)
+                        if package_name:
+                            st.error(f"❌ مكتبة ناقصة: `{package_name}`")
+                            st.info("🔄 جاري التثبيت التلقائي...")
+                            try:
+                                # التثبيت مع عرض التقدم
+                                install_result = subprocess.run(
+                                    [sys.executable, "-m", "pip", "install", package_name],
+                                    capture_output=True,
+                                    text=True
+                                )
+                                if install_result.returncode == 0:
+                                    st.success(f"✅ تم تثبيت `{package_name}` بنجاح!")
+                                    st.info("🔄 اضغط 'تشكيل النص' مرة أخرى")
+                                    st.session_state.packages_installed = False
+                                else:
+                                    st.error(f"❌ فشل التثبيت:")
+                                    st.code(install_result.stderr, language="bash")
+                                    st.warning("💡 أضف هذه المكتبة إلى requirements.txt:")
+                                    st.code(package_name)
+                            except Exception as install_error:
+                                st.error(f"❌ خطأ أثناء التثبيت: {install_error}")
+                        else:
+                            st.error("❌ لم يتم التعرف على المكتبة الناقصة:")
+                            st.code(error_msg, language="bash")
+                    elif "CUDA" in error_msg or "cuda" in error_msg:
+                        st.error("❌ خطأ GPU - السيرفر يعمل بـ CPU فقط")
+                    else:
+                        st.error(f"❌ خطأ من المحرك:")
+                        st.code(error_msg, language="bash")
+
+            except subprocess.TimeoutExpired:
+                st.error("❌ انتهت المهلة - النص طويل جداً!")
+            except Exception as e:
+                st.error(f"❌ خطأ نظام: {e}")
+                import traceback
+                st.code(traceback.format_exc(), language="python")
+
+# =============================================
+# 10. معلومات إضافية
+# =============================================
+with st.expander("ℹ️ معلومات عن التطبيق"):
+    st.markdown("""
+        - **المحرك**: Rababa CBHG Model
+        - **الوظيفة**: تشكيل النصوص العربية تلقائياً
+        - **الدقة**: ~95% على النصوص الفصحى
+    """)
+    st.text(f"📂 مسار المحرك: {PYTHON_DIR}")
+    st.text(f"🐍 Python: {sys.version}")                    # معالجة الأخطاء الشائعة
                     # ===============================
                     error_msg = result.stderr
                     if "No module named" in error_msg:
