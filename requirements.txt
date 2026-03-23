@@ -1,0 +1,6 @@
+streamlit
+torch
+numpy
+PyYAML
+onnxruntime
+diacritization_evaluation
