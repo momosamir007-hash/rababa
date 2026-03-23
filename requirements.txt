@@ -1,6 +1,7 @@
 streamlit
+tqdm
 torch
 numpy
-PyYAML
+pyyaml
 onnxruntime
 diacritization_evaluation
