@@ -6,3 +6,4 @@ pyyaml
 onnxruntime
 diacritization_evaluation
 ruamel.yaml
+--extra-index-url https://download.pytorch.org/whl/cpu
